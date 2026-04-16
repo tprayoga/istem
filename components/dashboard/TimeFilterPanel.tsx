@@ -7,10 +7,12 @@ type TimeFilterPanelProps = {
   endValue: string;
   onChangeStart: (value: string) => void;
   onChangeEnd: (value: string) => void;
+  onApply: () => void;
   onReset: () => void;
   onPresetHours: (hours: number) => void;
   filteredCount: number;
   totalCount: number;
+  hasPendingChanges: boolean;
 };
 
 export function TimeFilterPanel({
@@ -18,10 +20,12 @@ export function TimeFilterPanel({
   endValue,
   onChangeStart,
   onChangeEnd,
+  onApply,
   onReset,
   onPresetHours,
   filteredCount,
   totalCount,
+  hasPendingChanges,
 }: TimeFilterPanelProps) {
   return (
     <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_8px_20px_rgba(15,23,42,0.06)]">
@@ -35,7 +39,7 @@ export function TimeFilterPanel({
         </span>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+      <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto_auto]">
         <label className="text-xs text-slate-600">
           Start Time
           <input
@@ -54,6 +58,18 @@ export function TimeFilterPanel({
             className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-2 text-sm text-slate-900 outline-none ring-emerald-500 focus:ring-2"
           />
         </label>
+        <div className="flex items-end">
+          <button
+            type="button"
+            onClick={onApply}
+            className={`h-[42px] rounded-lg px-3 text-sm font-medium text-white ${
+              hasPendingChanges ? "bg-emerald-600 hover:bg-emerald-700" : "bg-slate-400"
+            }`}
+            disabled={!hasPendingChanges}
+          >
+            Terapkan
+          </button>
+        </div>
         <div className="flex items-end">
           <button
             type="button"

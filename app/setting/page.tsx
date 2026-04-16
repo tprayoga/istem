@@ -17,8 +17,17 @@ import { RawCtPoint } from "@/types/monitoring";
 import { useEffect, useState } from "react";
 
 export default function SettingPage() {
-  const [sourceState, setSourceState] = useState<PersistedDataSource>(() => loadPersistedDataSource() ?? getDefaultDataSource());
+  const [sourceState, setSourceState] = useState<PersistedDataSource>(() => getDefaultDataSource());
   const [tbConfig, setTbConfig] = useState<ThingsBoardConfig>(() => loadThingsBoardConfig());
+
+  useEffect(() => {
+    const persisted = loadPersistedDataSource();
+    if (!persisted) return;
+    const timer = setTimeout(() => {
+      setSourceState(persisted);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     saveThingsBoardConfig(tbConfig);

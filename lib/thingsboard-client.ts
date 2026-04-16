@@ -6,6 +6,16 @@ export async function fetchThingsBoardPoints(config: ThingsBoardConfig): Promise
   points: RawCtPoint[];
   message: string;
 }> {
+  return fetchThingsBoardPointsWithRange(config, 24 * 60);
+}
+
+export async function fetchThingsBoardPointsWithRange(
+  config: ThingsBoardConfig,
+  rangeMinutes: number,
+): Promise<{
+  points: RawCtPoint[];
+  message: string;
+}> {
   const keyList = config.keys
     .split(",")
     .map((item) => item.trim())
@@ -21,7 +31,8 @@ export async function fetchThingsBoardPoints(config: ThingsBoardConfig): Promise
   }
 
   const endTs = Date.now();
-  const startTs = endTs - 24 * 60 * 60 * 1000;
+  const safeRangeMinutes = Math.max(1, rangeMinutes);
+  const startTs = endTs - safeRangeMinutes * 60 * 1000;
   const payload: ThingsBoardRequest = {
     baseUrl: config.baseUrl.trim(),
     accessToken: config.accessToken?.trim() ?? "",
@@ -58,6 +69,6 @@ export async function fetchThingsBoardPoints(config: ThingsBoardConfig): Promise
 
   return {
     points,
-    message: `Terhubung. ${points.length} data berhasil dimuat.`,
+    message: `Terhubung. ${points.length} data berhasil dimuat (${safeRangeMinutes} menit terakhir).`,
   };
 }

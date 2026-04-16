@@ -15,12 +15,12 @@ import {
 } from "@/types/monitoring";
 
 export const DEFAULT_THRESHOLD_CONFIG: ThresholdConfig = {
-  offMax: 1,
-  standbyMax: 3,
-  productionMax: 20,
-  highLoadMax: 25,
-  unbalanceMaxPct: 10,
-  lowLoadMax: 8,
+  offMax: 3,
+  standbyMax: 6,
+  productionMax: 25,
+  highLoadMax: 30,
+  unbalanceMaxPct: 14,
+  lowLoadMax: 12,
 };
 
 function normalizeThresholdConfig(config?: Partial<ThresholdConfig>): ThresholdConfig {

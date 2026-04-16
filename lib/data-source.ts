@@ -79,13 +79,13 @@ export function savePersistedDataSource(payload: PersistedDataSource): void {
 export function getDefaultThingsBoardConfig(): ThingsBoardConfig {
   return {
     baseUrl: "https://dragonwatch.indoteksaft.co.id",
-    deviceId: "",
-    keys: "current_r,current_s,current_t",
+    deviceId: "d5f26410-1862-11f1-aba0-855f22b851d8",
+    keys: "R,S,T",
     accessToken: "",
-    username: "",
-    password: "",
+    username: "tenant@indoteksaft.co.id",
+    password: "tenant",
     autoRefreshEnabled: true,
-    autoRefreshSec: 30,
+    autoRefreshSec: 3,
   };
 }
 
@@ -96,12 +96,16 @@ export function loadThingsBoardConfig(): ThingsBoardConfig {
     if (!raw) return getDefaultThingsBoardConfig();
     const parsed = JSON.parse(raw) as Partial<ThingsBoardConfig>;
     const defaults = getDefaultThingsBoardConfig();
-    return {
+    const merged = {
       ...defaults,
       ...parsed,
-      autoRefreshSec: Number.isFinite(parsed.autoRefreshSec) ? Math.max(10, Number(parsed.autoRefreshSec)) : defaults.autoRefreshSec,
+      autoRefreshSec: Number.isFinite(parsed.autoRefreshSec) ? Math.max(1, Number(parsed.autoRefreshSec)) : defaults.autoRefreshSec,
       autoRefreshEnabled: parsed.autoRefreshEnabled ?? defaults.autoRefreshEnabled,
     };
+    if ((merged.keys ?? "").trim().toLowerCase() === "current_r,current_s,current_t") {
+      merged.keys = "R,S,T";
+    }
+    return merged;
   } catch {
     return getDefaultThingsBoardConfig();
   }
@@ -112,10 +116,19 @@ export function saveThingsBoardConfig(config: ThingsBoardConfig): void {
   try {
     const safeConfig: ThingsBoardConfig = {
       ...config,
-      autoRefreshSec: Math.max(10, config.autoRefreshSec),
+      autoRefreshSec: Math.max(1, config.autoRefreshSec),
     };
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(safeConfig));
   } catch {
     // ignore
   }
+}
+
+export function mergeRawPoints(existing: RawCtPoint[], incoming: RawCtPoint[], maxPoints = MAX_POINTS_TO_STORE): RawCtPoint[] {
+  const map = new Map<string, RawCtPoint>();
+  sanitizePoints(existing).forEach((point) => map.set(point.timestamp, point));
+  sanitizePoints(incoming).forEach((point) => map.set(point.timestamp, point));
+  return [...map.values()]
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    .slice(-maxPoints);
 }

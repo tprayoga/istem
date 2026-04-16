@@ -31,8 +31,8 @@ export function ThingsBoardIntegrationPanel({
   const setConfig = (patch: Partial<ThingsBoardConfig>) => onConfigChange({ ...config, ...patch });
 
   const onNumberChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const sec = Math.max(10, Number(event.target.value || 30));
-    setConfig({ autoRefreshSec: Number.isFinite(sec) ? sec : 30 });
+    const sec = Math.max(1, Number(event.target.value || 3));
+    setConfig({ autoRefreshSec: Number.isFinite(sec) ? sec : 3 });
   };
 
   const loadThingsBoard = async () => {
@@ -130,13 +130,13 @@ export function ThingsBoardIntegrationPanel({
             onChange={(event) => setConfig({ autoRefreshEnabled: event.target.checked })}
             className="h-4 w-4 rounded border-slate-300"
           />
-          Auto Refresh Dashboard
+          Realtime Refresh Dashboard
         </label>
         <label className="text-xs text-slate-600">
           Interval (detik)
           <input
             type="number"
-            min={10}
+            min={1}
             value={config.autoRefreshSec}
             onChange={onNumberChange}
             className="ml-2 w-24 rounded-lg border border-slate-300 px-2 py-1 text-sm text-slate-900 outline-none ring-emerald-500 focus:ring-2"

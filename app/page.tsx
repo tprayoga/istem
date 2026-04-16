@@ -15,11 +15,12 @@ import {
   getDefaultDataSource,
   loadPersistedDataSource,
   loadThingsBoardConfig,
+  mergeRawPoints,
   PersistedDataSource,
   savePersistedDataSource,
 } from "@/lib/data-source";
 import { DEFAULT_THRESHOLD_CONFIG, deriveDataQuality, deriveMonitoringData, formatDateTime, formatDuration } from "@/lib/monitoring";
-import { fetchThingsBoardPoints } from "@/lib/thingsboard-client";
+import { fetchThingsBoardPointsWithRange } from "@/lib/thingsboard-client";
 import { Activity, Gauge, PauseCircle, PlayCircle, Siren, Timer } from "lucide-react";
 import { MachineStatus, ThresholdConfig } from "@/types/monitoring";
 import dynamic from "next/dynamic";
@@ -40,34 +41,142 @@ function toInputDateTime(iso: string): string {
   return local.toISOString().slice(0, 16);
 }
 
+function lowerBound(arr: number[], target: number): number {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function upperBound(arr: number[], target: number): number {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] <= target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function hasThingsBoardCredentials(config: ReturnType<typeof loadThingsBoardConfig>): boolean {
+  return Boolean(config.accessToken?.trim() || (config.username?.trim() && config.password?.trim()));
+}
+
+function getRangeFromPoints(points: PersistedDataSource["points"]) {
+  const first = points[0]?.timestamp ?? new Date().toISOString();
+  const last = points[points.length - 1]?.timestamp ?? new Date().toISOString();
+  return {
+    start: toInputDateTime(first),
+    end: toInputDateTime(last),
+  };
+}
+
 export default function HomePage() {
   const [thresholdConfig, setThresholdConfig] = useState<ThresholdConfig>(DEFAULT_THRESHOLD_CONFIG);
-  const [sourceState, setSourceState] = useState<PersistedDataSource>(() => loadPersistedDataSource() ?? getDefaultDataSource());
-  const [filterRange, setFilterRange] = useState(() => {
-    const first = sourceState.points[0]?.timestamp ?? new Date().toISOString();
-    const last = sourceState.points[sourceState.points.length - 1]?.timestamp ?? new Date().toISOString();
-    return {
-      start: toInputDateTime(first),
-      end: toInputDateTime(last),
-    };
-  });
+  const [sourceState, setSourceState] = useState<PersistedDataSource>(() => getDefaultDataSource());
+  const [draftFilterRange, setDraftFilterRange] = useState(() => getRangeFromPoints(sourceState.points));
+  const [appliedFilterRange, setAppliedFilterRange] = useState(draftFilterRange);
+
+  const pointTimes = useMemo(() => sourceState.points.map((point) => new Date(point.timestamp).getTime()), [sourceState.points]);
 
   const filteredPoints = useMemo(() => {
-    const startMs = new Date(filterRange.start).getTime();
-    const endMs = new Date(filterRange.end).getTime();
+    const startMs = new Date(appliedFilterRange.start).getTime();
+    const endMs = new Date(appliedFilterRange.end).getTime();
     if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return sourceState.points;
-    return sourceState.points.filter((point) => {
-      const ts = new Date(point.timestamp).getTime();
-      return ts >= startMs && ts <= endMs;
-    });
-  }, [sourceState.points, filterRange.start, filterRange.end]);
+    const from = lowerBound(pointTimes, startMs);
+    const to = upperBound(pointTimes, endMs);
+    return sourceState.points.slice(from, to);
+  }, [sourceState.points, pointTimes, appliedFilterRange.start, appliedFilterRange.end]);
 
   const { points, metrics } = useMemo(
     () => deriveMonitoringData(filteredPoints, thresholdConfig),
     [filteredPoints, thresholdConfig],
   );
   const quality = useMemo(() => deriveDataQuality(filteredPoints), [filteredPoints]);
-  const lastTimestamp = points[points.length - 1]?.timestamp ?? new Date().toISOString();
+  const lastUpdateTimestamp = sourceState.lastSyncAt || points[points.length - 1]?.timestamp || new Date().toISOString();
+
+  useEffect(() => {
+    const persisted = loadPersistedDataSource();
+    let hydrateTimer: ReturnType<typeof setTimeout> | null = null;
+    if (persisted) {
+      hydrateTimer = setTimeout(() => {
+        setSourceState(persisted);
+        const range = getRangeFromPoints(persisted.points);
+        setDraftFilterRange(range);
+        setAppliedFilterRange(range);
+      }, 0);
+    }
+
+    let cancelled = false;
+    const bootstrapThingsBoard = async () => {
+      const config = loadThingsBoardConfig();
+      if (!config.baseUrl.trim() || !config.deviceId.trim() || !hasThingsBoardCredentials(config)) return;
+      try {
+        const result = await fetchThingsBoardPointsWithRange(config, 24 * 60);
+        if (cancelled) return;
+        const next: PersistedDataSource = {
+          sourceType: "thingsboard",
+          points: result.points,
+          lastSyncAt: new Date().toISOString(),
+        };
+        savePersistedDataSource(next);
+        setSourceState(next);
+        const range = getRangeFromPoints(next.points);
+        setDraftFilterRange(range);
+        setAppliedFilterRange(range);
+      } catch {
+        // keep fallback source, retry worker below will continue attempts
+      }
+    };
+    bootstrapThingsBoard();
+    return () => {
+      cancelled = true;
+      if (hydrateTimer) clearTimeout(hydrateTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (sourceState.sourceType === "thingsboard") return;
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const tryConnect = async () => {
+      if (cancelled) return;
+      const config = loadThingsBoardConfig();
+      if (!config.baseUrl.trim() || !config.deviceId.trim() || !hasThingsBoardCredentials(config)) {
+        timeoutId = setTimeout(tryConnect, 15000);
+        return;
+      }
+
+      try {
+        const result = await fetchThingsBoardPointsWithRange(config, 24 * 60);
+        if (cancelled) return;
+        setSourceState((prev) => {
+          if (prev.sourceType === "thingsboard" && prev.points.length > 0) return prev;
+          const next: PersistedDataSource = {
+            sourceType: "thingsboard",
+            points: mergeRawPoints(prev.points, result.points),
+            lastSyncAt: new Date().toISOString(),
+          };
+          savePersistedDataSource(next);
+          return next;
+        });
+      } catch {
+        timeoutId = setTimeout(tryConnect, 15000);
+      }
+    };
+
+    timeoutId = setTimeout(tryConnect, 500);
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [sourceState.sourceType]);
 
   useEffect(() => {
     if (sourceState.sourceType !== "thingsboard") return;
@@ -77,18 +186,20 @@ export default function HomePage() {
     const tick = async () => {
       if (cancelled) return;
       const config = loadThingsBoardConfig();
-      const nextDelayMs = Math.max(10, config.autoRefreshSec) * 1000;
+      const nextDelayMs = Math.max(1, config.autoRefreshSec) * 1000;
 
       if (config.autoRefreshEnabled) {
         try {
-          const result = await fetchThingsBoardPoints(config);
-          const next: PersistedDataSource = {
-            sourceType: "thingsboard",
-            points: result.points,
-            lastSyncAt: new Date().toISOString(),
-          };
-          savePersistedDataSource(next);
-          setSourceState(next);
+          const result = await fetchThingsBoardPointsWithRange(config, 15);
+          setSourceState((prev) => {
+            const next: PersistedDataSource = {
+              sourceType: "thingsboard",
+              points: mergeRawPoints(prev.points, result.points),
+              lastSyncAt: new Date().toISOString(),
+            };
+            savePersistedDataSource(next);
+            return next;
+          });
         } catch {
           // silent retry on next cycle
         }
@@ -116,7 +227,7 @@ export default function HomePage() {
     <main className="min-h-screen bg-[var(--color-bg)]">
       <div className="mx-auto max-w-[1900px] px-4 py-5 md:px-6">
         <DashboardHeader
-          lastUpdate={formatDateTime(lastTimestamp)}
+          lastUpdate={formatDateTime(lastUpdateTimestamp)}
           actions={
             <div className="flex items-center gap-2">
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
@@ -138,23 +249,29 @@ export default function HomePage() {
         />
 
         <TimeFilterPanel
-          startValue={filterRange.start}
-          endValue={filterRange.end}
-          onChangeStart={(value) => setFilterRange((prev) => ({ ...prev, start: value }))}
-          onChangeEnd={(value) => setFilterRange((prev) => ({ ...prev, end: value }))}
+          startValue={draftFilterRange.start}
+          endValue={draftFilterRange.end}
+          onChangeStart={(value) => setDraftFilterRange((prev) => ({ ...prev, start: value }))}
+          onChangeEnd={(value) => setDraftFilterRange((prev) => ({ ...prev, end: value }))}
+          onApply={() => setAppliedFilterRange(draftFilterRange)}
           onReset={() => {
-            const first = sourceState.points[0]?.timestamp ?? new Date().toISOString();
-            const last = sourceState.points[sourceState.points.length - 1]?.timestamp ?? new Date().toISOString();
-            setFilterRange({ start: toInputDateTime(first), end: toInputDateTime(last) });
+            const resetRange = getRangeFromPoints(sourceState.points);
+            setDraftFilterRange(resetRange);
+            setAppliedFilterRange(resetRange);
           }}
           onPresetHours={(hours) => {
             const last = sourceState.points[sourceState.points.length - 1]?.timestamp ?? new Date().toISOString();
             const end = new Date(last);
             const start = new Date(end.getTime() - hours * 60 * 60 * 1000);
-            setFilterRange({ start: toInputDateTime(start.toISOString()), end: toInputDateTime(end.toISOString()) });
+            const range = { start: toInputDateTime(start.toISOString()), end: toInputDateTime(end.toISOString()) };
+            setDraftFilterRange(range);
+            setAppliedFilterRange(range);
           }}
           filteredCount={filteredPoints.length}
           totalCount={sourceState.points.length}
+          hasPendingChanges={
+            draftFilterRange.start !== appliedFilterRange.start || draftFilterRange.end !== appliedFilterRange.end
+          }
         />
         <DataQualityPanel quality={quality} />
 
