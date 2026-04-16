@@ -24,7 +24,7 @@ import { fetchThingsBoardPointsWithRange } from "@/lib/thingsboard-client";
 import { Activity, Gauge, PauseCircle, PlayCircle, Siren, Timer } from "lucide-react";
 import { MachineStatus, ThresholdConfig } from "@/types/monitoring";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const CurrentTrendChart = dynamic(
   () => import("@/components/dashboard/CurrentTrendChart").then((module) => module.CurrentTrendChart),
@@ -81,6 +81,7 @@ export default function HomePage() {
   const [sourceState, setSourceState] = useState<PersistedDataSource>(() => getDefaultDataSource());
   const [draftFilterRange, setDraftFilterRange] = useState(() => getRangeFromPoints(sourceState.points));
   const [appliedFilterRange, setAppliedFilterRange] = useState(draftFilterRange);
+  const prevLastPointMsRef = useRef<number | null>(null);
 
   const pointTimes = useMemo(() => sourceState.points.map((point) => new Date(point.timestamp).getTime()), [sourceState.points]);
 
@@ -99,6 +100,50 @@ export default function HomePage() {
   );
   const quality = useMemo(() => deriveDataQuality(filteredPoints), [filteredPoints]);
   const lastUpdateTimestamp = sourceState.lastSyncAt || points[points.length - 1]?.timestamp || new Date().toISOString();
+
+  useEffect(() => {
+    const currentLastIso = sourceState.points[sourceState.points.length - 1]?.timestamp;
+    if (!currentLastIso) return;
+    const currentLastMs = new Date(currentLastIso).getTime();
+    const prevLastMs = prevLastPointMsRef.current;
+    prevLastPointMsRef.current = currentLastMs;
+    if (!prevLastMs || currentLastMs <= prevLastMs) return;
+
+    const hasPendingChanges =
+      draftFilterRange.start !== appliedFilterRange.start || draftFilterRange.end !== appliedFilterRange.end;
+    if (hasPendingChanges) return;
+
+    const appliedStartMs = new Date(appliedFilterRange.start).getTime();
+    const appliedEndMs = new Date(appliedFilterRange.end).getTime();
+    if (!Number.isFinite(appliedStartMs) || !Number.isFinite(appliedEndMs)) return;
+
+    // Follow realtime if previous filter end is close to previous latest data timestamp.
+    const followThresholdMs = 2 * 60 * 1000;
+    const shouldFollowRealtime = Math.abs(appliedEndMs - prevLastMs) <= followThresholdMs;
+    if (!shouldFollowRealtime) return;
+
+    const firstMs = new Date(sourceState.points[0]?.timestamp ?? currentLastIso).getTime();
+    const windowMs = Math.max(60_000, appliedEndMs - appliedStartMs);
+    const nextEndMs = currentLastMs;
+    const nextStartMs = Math.max(firstMs, nextEndMs - windowMs);
+    const nextRange = {
+      start: toInputDateTime(new Date(nextStartMs).toISOString()),
+      end: toInputDateTime(new Date(nextEndMs).toISOString()),
+    };
+
+    const timer = setTimeout(() => {
+      setDraftFilterRange(nextRange);
+      setAppliedFilterRange(nextRange);
+    }, 0);
+
+    return () => clearTimeout(timer);
+  }, [
+    sourceState.points,
+    draftFilterRange.start,
+    draftFilterRange.end,
+    appliedFilterRange.start,
+    appliedFilterRange.end,
+  ]);
 
   useEffect(() => {
     const persisted = loadPersistedDataSource();
